@@ -18,6 +18,7 @@ Tested with gglm-base.bin model only.
 - **Smart text insertion** – uses UI Automation when possible, falls back to clipboard + `SendInput` while restoring clipboard contents afterwards.
 - **Foreground window rebinding** – remembers the window that had focus when recording began and restores focus before pasting.
 - **System tray operation** – minimizes to the notification area with status balloons for recording and errors.
+- **Built-in model management** – browse installed Whisper models, download new `.bin` files from the official `ggerganov/whisper.cpp` catalog, and switch the active model without leaving the app.
 
 ## System requirements
 - Windows 10 or Windows 11 (x64)
@@ -33,7 +34,7 @@ Stenographer/
 │   ├── Core/, Services/, Models/ # Audio capture, hotkeys, insertion, configuration
 │   └── Stenographer.csproj       # Project file (WinExe, net8.0-windows)
 ├── Models/whisper.cpp/           # Whisper executable + model (copied to output)
-├── setup_models.bat              # Downloads Whisper binaries/models
+├── setup_models.bat              # Legacy offline bootstrapper (UI can download models now)
 └── Readme.md
 ```
 
@@ -43,18 +44,19 @@ Stenographer/
 dotnet restore
 ```
 
-### 2. Download Whisper binaries & base model
-Run the scripted setup from the repository root:
-```powershell
-setup_models.bat
-```
-The script downloads the latest Windows `main.exe` build of Whisper.cpp and the `ggml-base.bin` model into `Models\\whisper.cpp`.
-
-### 3. Launch the app in development
+### 2. Launch the app in development
 ```powershell
 dotnet run --project Stenographer/Stenographer.csproj
 ```
 Press the global hotkey to record, then release it to trigger transcription.
+
+Once the UI loads, open **Model Management → Open Model Manager…** (or use the sidebar button) to:
+- see which Whisper models are already available locally,
+- fetch the latest `.bin` models from https://huggingface.co/ggerganov/whisper.cpp/tree/main,
+- download a model with live progress feedback,
+- and choose the active model for new recordings.
+
+> ℹ️ `setup_models.bat` is still in the repo for air-gapped scenarios, but normal usage should rely on the in-app manager.
 
 ## Build & deployment
 ### One-command release packaging
@@ -73,15 +75,15 @@ The publish output lives under `Stenographer\bin\Release\net8.0-windows\win-x64\
 
 ## Deployment checklist
 - Copy the entire publish folder to the target machine.
-- Ensure `Models\\whisper.cpp\\main.exe` and `Models\\whisper.cpp\\ggml-base.bin` are present (they are included automatically when using the publish output).
-- Run `setup_models.bat` on fresh installs if the models are not already bundled.
+- Ensure `Models\\whisper.cpp\\main.exe` is present. Whisper models can be bundled ahead of time **or** downloaded after install via the in-app Model Manager.
+- For completely offline deployments you can still run `setup_models.bat` once to seed the default model.
 
 ## Troubleshooting
 | Scenario | Suggestions |
 | --- | --- |
 | Hotkey will not register | Run Stenographer as administrator or choose a different hotkey in settings. |
 | No audio devices detected | Confirm microphone permissions in Windows Privacy settings; reconnect the device and reopen the app. |
-| Whisper process fails | Verify that `main.exe` and `ggml-base.bin` exist under `Models\\whisper.cpp`. Re-run `setup_models.bat` if necessary. |
+| Whisper process fails | Verify that `main.exe` exists under `Models\\whisper.cpp` and install/select a model through **Model Management → Open Model Manager…** (or, offline, run `setup_models.bat`). |
 | Text not inserted | Target applications with restricted input may block automation. Check the status bar to see whether clipboard fallback failed and retry with the target focused. |
 
 

@@ -71,6 +71,7 @@ public class ConfigurationService
 
         Configuration.Hotkey ??= HotkeySettings.CreateDefault();
         Configuration.TranscriptionLanguage ??= string.Empty;
+        Configuration.SelectedModelFileName ??= string.Empty;
     }
 
     public void Save()
@@ -79,6 +80,7 @@ public class ConfigurationService
 
         Configuration.Hotkey ??= HotkeySettings.CreateDefault();
         Configuration.TranscriptionLanguage ??= string.Empty;
+        Configuration.SelectedModelFileName ??= string.Empty;
 
         var json = JsonSerializer.Serialize(Configuration, SerializerOptions);
         File.WriteAllText(_configPath, json);

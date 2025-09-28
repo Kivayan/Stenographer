@@ -11,13 +11,44 @@ namespace Stenographer.Core;
 public class WhisperService
 {
     private readonly string _whisperExecutablePath;
-    private readonly string _modelPath;
+    private readonly string _modelDirectory;
+    private string _modelPath;
+    private string _modelFileName;
 
-    public WhisperService()
+    public WhisperService(string modelFileName = null)
     {
         var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
         _whisperExecutablePath = Path.Combine(baseDirectory, "Models", "whisper.cpp", "main.exe");
-        _modelPath = Path.Combine(baseDirectory, "Models", "whisper.cpp", "ggml-base.bin");
+        _modelDirectory = Path.Combine(baseDirectory, "Models", "whisper.cpp");
+        Directory.CreateDirectory(_modelDirectory);
+        UpdateModelPath(modelFileName);
+    }
+
+    public string CurrentModelFileName => _modelFileName;
+
+    public string CurrentModelPath => _modelPath;
+
+    public void SetModelFile(string modelFileName)
+    {
+        UpdateModelPath(modelFileName);
+    }
+
+    private void UpdateModelPath(string modelFileName)
+    {
+        var resolvedFileName = string.IsNullOrWhiteSpace(modelFileName)
+            ? "ggml-base.bin"
+            : modelFileName.Trim();
+
+        if (Path.IsPathRooted(resolvedFileName))
+        {
+            _modelFileName = Path.GetFileName(resolvedFileName);
+            _modelPath = resolvedFileName;
+        }
+        else
+        {
+            _modelFileName = resolvedFileName;
+            _modelPath = Path.Combine(_modelDirectory, resolvedFileName);
+        }
     }
 
     public Task<string> TranscribeAsync(string audioFilePath, string languageCode = "")

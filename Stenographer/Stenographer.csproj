@@ -30,4 +30,8 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+  <ItemGroup>
+    <Page Remove="ModelManagementWindow.xaml" />
+    <Compile Remove="ModelManagementWindow.xaml.cs" />
+  </ItemGroup>
 </Project>

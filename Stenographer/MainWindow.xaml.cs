@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Media;
@@ -40,6 +42,7 @@ public partial class MainWindow : Window
     private readonly WhisperService _whisperService;
     private readonly HotkeyManager _hotkeyManager;
     private readonly ConfigurationService _configurationService;
+    private readonly ModelService _modelService;
     private readonly TextInsertion _textInsertion;
     private readonly WindowManager _windowManager;
     private const string StartSoundFileName = "record_start.wav";
@@ -57,6 +60,7 @@ public partial class MainWindow : Window
     private IntPtr _windowHandle;
     private Brush _defaultHotkeyStatusBrush;
     private Brush _defaultLanguageStatusBrush;
+    private Brush _defaultModelStatusBrush;
     private bool _isRecording;
     private bool _isTranscribing;
     private string _currentRecordingPath = string.Empty;
@@ -65,13 +69,23 @@ public partial class MainWindow : Window
     private Forms.ContextMenuStrip _trayMenu;
     private System.Drawing.Icon _trayIcon;
     private bool _trayBalloonShown;
+    private readonly ObservableCollection<WhisperLocalModel> _installedModelCollection = new();
+    private List<WhisperLocalModel> _installedModels = new();
+    private List<WhisperRemoteModel> _availableRemoteModels = new();
+    private bool _suppressModelSelectionChange;
+    private bool _isFetchingRemoteModels;
+    private string _remoteModelsError = string.Empty;
+    private bool _isDownloadingModel;
 
     public MainWindow()
     {
         InitializeComponent();
         _audioCapture = new AudioCapture();
-        _whisperService = new WhisperService();
         _configurationService = new ConfigurationService();
+        _configurationService.Load();
+        _modelService = new ModelService();
+        var initialModel = _configurationService.Configuration?.SelectedModelFileName;
+        _whisperService = new WhisperService(initialModel);
         _textInsertion = new TextInsertion();
         _windowManager = new WindowManager();
         _hotkeyManager = new HotkeyManager();
@@ -82,7 +96,6 @@ public partial class MainWindow : Window
         _hotkeyManager.HotkeyPressed += OnGlobalHotkeyPressed;
         _hotkeyManager.HotkeyReleased += OnGlobalHotkeyReleased;
 
-        _configurationService.Load();
         _currentHotkey = (
             _configurationService.Configuration?.Hotkey ?? HotkeySettings.CreateDefault()
         ).Clone();
@@ -92,9 +105,12 @@ public partial class MainWindow : Window
 
         _defaultHotkeyStatusBrush = HotkeyStatusText.Foreground;
         _defaultLanguageStatusBrush = LanguageStatusText.Foreground;
+        _defaultModelStatusBrush = ModelStatusText.Foreground;
         InitializeLanguageSelection();
+        InitializeModelSelection();
         UpdateHotkeyDisplay();
         RestoreHotkeyHint();
+        _ = LoadRemoteModelsAsync();
         InitializeSystemTray();
     }
 
@@ -154,6 +170,8 @@ public partial class MainWindow : Window
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         RefreshAudioDevices();
+        RefreshInstalledModels();
+        UpdateRecordButtonState();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
@@ -198,6 +216,8 @@ public partial class MainWindow : Window
             SetStatus($"Device error: {ex.Message}", Brushes.Red, showTrayBalloon: true);
             RecordButton.IsEnabled = false;
         }
+
+        UpdateRecordButtonState();
     }
 
     private void InitializeLanguageSelection()
@@ -218,6 +238,767 @@ public partial class MainWindow : Window
         _suppressLanguageSelectionChange = false;
 
         RestoreLanguageHint();
+    }
+
+    private void InitializeModelSelection()
+    {
+        _suppressModelSelectionChange = true;
+
+        _installedModels = new List<WhisperLocalModel>(_modelService.GetInstalledModels());
+        SyncInstalledModelCollection();
+        ModelComboBox.ItemsSource = _installedModelCollection;
+
+        if (
+            InstalledModelsListView != null
+            && InstalledModelsListView.ItemsSource != _installedModelCollection
+        )
+        {
+            InstalledModelsListView.ItemsSource = _installedModelCollection;
+        }
+
+        var savedFile = _configurationService.Configuration?.SelectedModelFileName ?? string.Empty;
+        var selected = _installedModels.FirstOrDefault(model =>
+            string.Equals(model.FileName, savedFile, StringComparison.OrdinalIgnoreCase)
+        );
+
+        if (selected == null && _installedModels.Count > 0)
+        {
+            selected = _installedModels[0];
+        }
+
+        ModelComboBox.SelectedItem = selected;
+
+        if (InstalledModelsListView != null)
+        {
+            InstalledModelsListView.SelectedItem = selected;
+        }
+
+        _suppressModelSelectionChange = false;
+
+        if (selected != null)
+            SyncInstalledModelCollection();
+
+        if (ModelComboBox.ItemsSource != _installedModelCollection)
+        {
+            ModelComboBox.ItemsSource = _installedModelCollection;
+        }
+
+        if (
+            InstalledModelsListView != null
+            && InstalledModelsListView.ItemsSource != _installedModelCollection
+        )
+        {
+            InstalledModelsListView.ItemsSource = _installedModelCollection;
+        }
+        UpdateModelManagerButtons();
+    }
+
+    private void SyncInstalledModelCollection()
+    {
+        _installedModelCollection.Clear();
+
+        foreach (var model in _installedModels)
+        {
+            _installedModelCollection.Add(model);
+        }
+    }
+
+    private void ApplyModelSelection(WhisperLocalModel model, bool persist)
+    {
+        if (model == null)
+        {
+            _configurationService.Configuration.SelectedModelFileName = string.Empty;
+
+            if (persist)
+            {
+                TryPersistSelectedModel();
+            }
+
+            UpdateModelHint(
+                "No models installed. Use Model Management to download one.",
+                Brushes.OrangeRed
+            );
+            return;
+        }
+
+        _whisperService.SetModelFile(model.FileName);
+        _configurationService.Configuration.SelectedModelFileName = model.FileName;
+
+        if (persist)
+        {
+            if (TryPersistSelectedModel())
+            {
+                UpdateModelHint($"Active model: {model.FileName} ({model.FormattedSize}).");
+            }
+        }
+        else
+        {
+            UpdateModelHint($"Active model: {model.FileName} ({model.FormattedSize}).");
+        }
+    }
+
+    private bool TryPersistSelectedModel()
+    {
+        try
+        {
+            _configurationService.Save();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            UpdateModelHint(
+                $"Model saved for this session, but couldn't persist: {ex.Message}",
+                Brushes.OrangeRed
+            );
+            return false;
+        }
+    }
+
+    private void UpdateModelHint(string message = null, Brush overrideBrush = null)
+    {
+        if (ModelStatusText == null)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            if (ModelComboBox.SelectedItem is WhisperLocalModel selectedModel)
+            {
+                message =
+                    $"Active model: {selectedModel.FileName} ({selectedModel.FormattedSize}).";
+            }
+            else
+            {
+                message = "Select or download a model to enable transcription.";
+            }
+        }
+
+        ModelStatusText.Text = message;
+        ModelStatusText.Foreground = overrideBrush ?? _defaultModelStatusBrush;
+    }
+
+    private bool HasActiveModel
+    {
+        get
+        {
+            if (ModelComboBox?.SelectedItem is not WhisperLocalModel model)
+            {
+                return false;
+            }
+
+            return File.Exists(model.FilePath);
+        }
+    }
+
+    private void UpdateRecordButtonState()
+    {
+        if (RecordButton == null || DeviceComboBox == null)
+        {
+            return;
+        }
+
+        var hasDevice = _audioDevices.Count > 0;
+        var canRecord =
+            hasDevice
+            && HasActiveModel
+            && !_isRecording
+            && !_isTranscribing
+            && !_isDownloadingModel;
+
+        RecordButton.IsEnabled = canRecord;
+        DeviceComboBox.IsEnabled = !_isRecording && hasDevice;
+
+        if (!HasActiveModel && !_isRecording && !_isTranscribing)
+        {
+            RecordingFileText.Text = "Download a Whisper model to start recording.";
+        }
+    }
+
+    private void RefreshInstalledModels()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(RefreshInstalledModels);
+            return;
+        }
+
+        var previousSelection = ModelComboBox.SelectedItem as WhisperLocalModel;
+        var previousFileName =
+            previousSelection?.FileName
+            ?? _configurationService.Configuration?.SelectedModelFileName
+            ?? string.Empty;
+
+        _suppressModelSelectionChange = true;
+
+        _installedModels = new List<WhisperLocalModel>(_modelService.GetInstalledModels());
+
+        ModelComboBox.ItemsSource = null;
+        ModelComboBox.ItemsSource = _installedModels;
+        ModelComboBox.Items.Refresh();
+
+        if (InstalledModelsListView != null)
+        {
+            if (
+                InstalledModelsListView.ItemsSource
+                is ObservableCollection<WhisperLocalModel> observable
+            )
+            {
+                observable.Clear();
+
+                foreach (var model in _installedModels)
+                {
+                    observable.Add(model);
+                }
+            }
+            else
+            {
+                InstalledModelsListView.ItemsSource = new ObservableCollection<WhisperLocalModel>(
+                    _installedModels
+                );
+            }
+        }
+
+        WhisperLocalModel selected = null;
+
+        if (!string.IsNullOrWhiteSpace(previousFileName))
+        {
+            selected = _installedModels.FirstOrDefault(model =>
+                string.Equals(model.FileName, previousFileName, StringComparison.OrdinalIgnoreCase)
+            );
+        }
+
+        if (selected == null && _installedModels.Count > 0)
+        {
+            selected = _installedModels[0];
+        }
+
+        ModelComboBox.SelectedItem = selected;
+
+        if (InstalledModelsListView != null)
+        {
+            InstalledModelsListView.SelectedItem = selected;
+        }
+
+        _suppressModelSelectionChange = false;
+
+        if (selected != null)
+        {
+            ApplyModelSelection(selected, persist: false);
+        }
+        else
+        {
+            ApplyModelSelection(null, persist: false);
+        }
+
+        PopulateInstalledModelsMenuItems();
+        UpdateModelHint();
+        UpdateRecordButtonState();
+        UpdateModelManagerButtons();
+    }
+
+    private void ModelComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressModelSelectionChange)
+        {
+            return;
+        }
+
+        if (ModelComboBox.SelectedItem is WhisperLocalModel selectedModel)
+        {
+            ApplyModelSelection(selectedModel, persist: true);
+        }
+        else
+        {
+            ApplyModelSelection(null, persist: true);
+        }
+
+        PopulateInstalledModelsMenuItems();
+        UpdateRecordButtonState();
+    }
+
+    private void ManageModelsButton_Click(object sender, RoutedEventArgs e)
+    {
+        ShowModelManagementTab();
+    }
+
+    private void ShowModelManagementTab()
+    {
+        if (MainTabControl == null)
+        {
+            return;
+        }
+
+        MainTabControl.SelectedIndex = 1;
+        MainTabControl.Focus();
+    }
+
+    private async Task LoadRemoteModelsAsync()
+    {
+        if (_isFetchingRemoteModels)
+        {
+            return;
+        }
+
+        _isFetchingRemoteModels = true;
+        _remoteModelsError = string.Empty;
+        await Dispatcher.InvokeAsync(() =>
+        {
+            if (RemoteModelsListView != null)
+            {
+                RemoteModelsListView.ItemsSource = null;
+                RemoteModelsListView.SelectedIndex = -1;
+            }
+
+            UpdateModelManagerStatus("Loading remote model catalog...");
+            PopulateAvailableModelsMenuItems();
+            UpdateModelManagerButtons();
+        });
+
+        try
+        {
+            var remote = await _modelService.FetchRemoteModelsAsync();
+            _availableRemoteModels = new List<WhisperRemoteModel>(remote);
+        }
+        catch (Exception ex)
+        {
+            _availableRemoteModels = new List<WhisperRemoteModel>();
+            _remoteModelsError = ex.Message;
+        }
+        finally
+        {
+            _isFetchingRemoteModels = false;
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (RemoteModelsListView != null)
+                {
+                    RemoteModelsListView.ItemsSource = _availableRemoteModels;
+                    RemoteModelsListView.SelectedIndex = _availableRemoteModels.Count > 0 ? 0 : -1;
+                }
+
+                PopulateAvailableModelsMenuItems();
+
+                if (!string.IsNullOrWhiteSpace(_remoteModelsError))
+                {
+                    UpdateModelManagerStatus($"Failed to load remote models: {_remoteModelsError}");
+                }
+                else if (_availableRemoteModels.Count == 0)
+                {
+                    UpdateModelManagerStatus("No remote models available from the catalog.");
+                }
+                else
+                {
+                    UpdateModelManagerStatus(
+                        $"Loaded {_availableRemoteModels.Count} remote models."
+                    );
+                }
+
+                UpdateModelManagerButtons();
+            });
+        }
+    }
+
+    private void ModelManagementMenuItem_SubmenuOpened(object sender, RoutedEventArgs e)
+    {
+        PopulateInstalledModelsMenuItems();
+        PopulateAvailableModelsMenuItems();
+
+        if (
+            !_isFetchingRemoteModels
+            && _availableRemoteModels.Count == 0
+            && string.IsNullOrEmpty(_remoteModelsError)
+        )
+        {
+            _ = LoadRemoteModelsAsync();
+        }
+    }
+
+    private void PopulateInstalledModelsMenuItems()
+    {
+        if (InstalledModelsMenuItem == null)
+        {
+            return;
+        }
+
+        InstalledModelsMenuItem.Items.Clear();
+
+        if (_installedModels.Count == 0)
+        {
+            InstalledModelsMenuItem.Items.Add(
+                new MenuItem { Header = "No models installed", IsEnabled = false }
+            );
+            return;
+        }
+
+        foreach (var model in _installedModels)
+        {
+            var item = new MenuItem
+            {
+                Header = $"{model.FileName} ({model.FormattedSize})",
+                IsCheckable = true,
+                IsChecked =
+                    ModelComboBox.SelectedItem is WhisperLocalModel selected
+                    && string.Equals(
+                        selected.FileName,
+                        model.FileName,
+                        StringComparison.OrdinalIgnoreCase
+                    ),
+                Tag = model,
+            };
+
+            item.Click += InstalledModelMenuItem_Click;
+            InstalledModelsMenuItem.Items.Add(item);
+        }
+    }
+
+    private void PopulateAvailableModelsMenuItems()
+    {
+        if (AvailableModelsMenuItem == null)
+        {
+            return;
+        }
+
+        AvailableModelsMenuItem.Items.Clear();
+
+        if (_isFetchingRemoteModels)
+        {
+            AvailableModelsMenuItem.Items.Add(
+                new MenuItem { Header = "Loading remote models...", IsEnabled = false }
+            );
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_remoteModelsError))
+        {
+            AvailableModelsMenuItem.Items.Add(
+                new MenuItem
+                {
+                    Header = $"Error loading catalog: {_remoteModelsError}",
+                    IsEnabled = false,
+                }
+            );
+
+            var retryItem = new MenuItem { Header = "Retry" };
+            retryItem.Click += RefreshRemoteModelsMenuItem_Click;
+            AvailableModelsMenuItem.Items.Add(retryItem);
+            return;
+        }
+
+        if (_availableRemoteModels.Count == 0)
+        {
+            AvailableModelsMenuItem.Items.Add(
+                new MenuItem { Header = "No remote models found.", IsEnabled = false }
+            );
+
+            var refreshItem = new MenuItem { Header = "Refresh" };
+            refreshItem.Click += RefreshRemoteModelsMenuItem_Click;
+            AvailableModelsMenuItem.Items.Add(refreshItem);
+            return;
+        }
+
+        foreach (var model in _availableRemoteModels)
+        {
+            var item = new MenuItem
+            {
+                Header = $"{model.FileName} ({model.FormattedSize})",
+                Tag = model,
+            };
+
+            item.Click += DownloadModelMenuItem_Click;
+            AvailableModelsMenuItem.Items.Add(item);
+        }
+
+        AvailableModelsMenuItem.Items.Add(new Separator());
+
+        var manageItem = new MenuItem { Header = "Show Model Manager Tab" };
+        manageItem.Click += OpenModelManagerMenuItem_Click;
+        AvailableModelsMenuItem.Items.Add(manageItem);
+    }
+
+    private void InstalledModelMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem || menuItem.Tag is not WhisperLocalModel model)
+        {
+            return;
+        }
+
+        var match = _installedModels.FirstOrDefault(installed =>
+            string.Equals(installed.FileName, model.FileName, StringComparison.OrdinalIgnoreCase)
+        );
+
+        if (match != null)
+        {
+            _suppressModelSelectionChange = true;
+            ModelComboBox.SelectedItem = match;
+            _suppressModelSelectionChange = false;
+            ApplyModelSelection(match, persist: true);
+            UpdateRecordButtonState();
+        }
+    }
+
+    private void DownloadModelMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem || menuItem.Tag is not WhisperRemoteModel remoteModel)
+        {
+            return;
+        }
+
+        _ = DownloadModelAsync(remoteModel);
+    }
+
+    private void RefreshRemoteModelsMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        _ = LoadRemoteModelsAsync();
+    }
+
+    private async Task DownloadModelAsync(WhisperRemoteModel remoteModel)
+    {
+        if (remoteModel == null || _isDownloadingModel)
+        {
+            return;
+        }
+
+        var destinationPath = Path.Combine(_modelService.ModelDirectory, remoteModel.FileName);
+
+        if (File.Exists(destinationPath))
+        {
+            var overwrite = MessageBox.Show(
+                this,
+                $"{remoteModel.FileName} already exists. Overwrite?",
+                "Overwrite model",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question
+            );
+
+            if (overwrite != MessageBoxResult.Yes)
+            {
+                return;
+            }
+        }
+
+        try
+        {
+            _isDownloadingModel = true;
+            if (ManageModelsButton != null)
+            {
+                ManageModelsButton.IsEnabled = false;
+            }
+
+            if (ModelComboBox != null)
+            {
+                ModelComboBox.IsEnabled = false;
+            }
+            UpdateRecordButtonState();
+            UpdateModelManagerButtons();
+
+            if (DownloadProgressBar != null)
+            {
+                DownloadProgressBar.Visibility = Visibility.Visible;
+                DownloadProgressBar.IsIndeterminate = remoteModel.SizeBytes == null;
+                DownloadProgressBar.Value = 0;
+            }
+
+            UpdateModelManagerStatus($"Downloading {remoteModel.FileName}...");
+
+            SetStatus($"Downloading {remoteModel.FileName}...", Brushes.SteelBlue);
+            RecordingFileText.Text = $"Downloading {remoteModel.FileName}...";
+
+            var progress = new Progress<ModelDownloadProgress>(value =>
+            {
+                if (value.Percentage is double percent)
+                {
+                    SetStatus(
+                        $"Downloading {remoteModel.FileName}: {percent:0.0}% complete",
+                        Brushes.SteelBlue
+                    );
+
+                    if (DownloadProgressBar != null)
+                    {
+                        DownloadProgressBar.IsIndeterminate = false;
+                        DownloadProgressBar.Value = Math.Clamp(percent, 0, 100);
+                    }
+
+                    UpdateModelManagerStatus(
+                        $"Downloading {remoteModel.FileName}: {percent:0.0}% complete"
+                    );
+                }
+                else
+                {
+                    SetStatus($"Downloading {remoteModel.FileName}...", Brushes.SteelBlue);
+                    UpdateModelManagerStatus($"Downloading {remoteModel.FileName}...");
+                }
+            });
+
+            await _modelService.DownloadModelAsync(remoteModel, progress);
+
+            SetStatus(
+                $"Download complete: {remoteModel.FileName}",
+                Brushes.Green,
+                showTrayBalloon: true
+            );
+            RecordingFileText.Text = $"Model saved to: {destinationPath}";
+            UpdateModelManagerStatus($"Download complete: {remoteModel.FileName}.");
+
+            RefreshInstalledModels();
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Model download failed: {ex.Message}", Brushes.Red, showTrayBalloon: true);
+            UpdateModelManagerStatus($"Download failed: {ex.Message}");
+        }
+        finally
+        {
+            _isDownloadingModel = false;
+            if (ModelComboBox != null)
+            {
+                ModelComboBox.IsEnabled = true;
+            }
+
+            if (ManageModelsButton != null)
+            {
+                ManageModelsButton.IsEnabled = true;
+            }
+            if (DownloadProgressBar != null)
+            {
+                DownloadProgressBar.Visibility = Visibility.Collapsed;
+                DownloadProgressBar.IsIndeterminate = false;
+                DownloadProgressBar.Value = 0;
+            }
+            PopulateInstalledModelsMenuItems();
+            PopulateAvailableModelsMenuItems();
+            UpdateRecordButtonState();
+            UpdateModelManagerButtons();
+        }
+    }
+
+    private void UpdateModelManagerStatus(string message)
+    {
+        if (ModelManagerStatusTextBlock == null)
+        {
+            return;
+        }
+
+        ModelManagerStatusTextBlock.Text = message ?? string.Empty;
+    }
+
+    private void UpdateModelManagerButtons()
+    {
+        if (
+            SetActiveModelButton == null
+            || DownloadModelButton == null
+            || RefreshRemoteButton == null
+            || OpenFolderButton == null
+        )
+        {
+            return;
+        }
+
+        var hasInstalledSelection = InstalledModelsListView?.SelectedItem is WhisperLocalModel;
+        var hasRemoteSelection = RemoteModelsListView?.SelectedItem is WhisperRemoteModel;
+
+        var canInteract = !_isDownloadingModel;
+
+        SetActiveModelButton.IsEnabled = hasInstalledSelection && canInteract;
+        OpenFolderButton.IsEnabled = canInteract;
+        DownloadModelButton.IsEnabled =
+            hasRemoteSelection && canInteract && !_isFetchingRemoteModels;
+        RefreshRemoteButton.IsEnabled = !_isFetchingRemoteModels && canInteract;
+    }
+
+    private void InstalledModelsListView_SelectionChanged(
+        object sender,
+        SelectionChangedEventArgs e
+    )
+    {
+        UpdateModelManagerButtons();
+
+        if (InstalledModelsListView?.SelectedItem is WhisperLocalModel model)
+        {
+            UpdateModelManagerStatus(
+                $"Selected installed model: {model.FileName} ({model.FormattedSize})."
+            );
+        }
+        else if (!_isDownloadingModel)
+        {
+            UpdateModelManagerStatus("Select an installed model to set it as active.");
+        }
+    }
+
+    private void RemoteModelsListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateModelManagerButtons();
+
+        if (RemoteModelsListView?.SelectedItem is WhisperRemoteModel model)
+        {
+            UpdateModelManagerStatus(
+                $"Ready to download {model.FileName} ({model.FormattedSize})."
+            );
+        }
+        else if (!_isFetchingRemoteModels && !_isDownloadingModel)
+        {
+            UpdateModelManagerStatus("Select a remote model to enable download.");
+        }
+    }
+
+    private void SetActiveModelButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (InstalledModelsListView?.SelectedItem is not WhisperLocalModel model)
+        {
+            return;
+        }
+
+        _suppressModelSelectionChange = true;
+        ModelComboBox.SelectedItem = model;
+        _suppressModelSelectionChange = false;
+        ApplyModelSelection(model, persist: true);
+        PopulateInstalledModelsMenuItems();
+        UpdateModelHint();
+        UpdateRecordButtonState();
+        UpdateModelManagerStatus($"Set active model to {model.FileName}.");
+    }
+
+    private void DownloadModelButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (RemoteModelsListView?.SelectedItem is WhisperRemoteModel model)
+        {
+            _ = DownloadModelAsync(model);
+        }
+    }
+
+    private void RefreshRemoteButton_Click(object sender, RoutedEventArgs e)
+    {
+        _ = LoadRemoteModelsAsync();
+    }
+
+    private void OpenFolderButton_Click(object sender, RoutedEventArgs e)
+    {
+        var modelDirectory = _modelService.ModelDirectory;
+
+        if (!Directory.Exists(modelDirectory))
+        {
+            UpdateModelManagerStatus($"Model directory not found: {modelDirectory}");
+            return;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = modelDirectory,
+                UseShellExecute = true,
+            };
+
+            Process.Start(startInfo);
+        }
+        catch (Exception ex)
+        {
+            UpdateModelManagerStatus($"Unable to open folder: {ex.Message}");
+        }
+    }
+
+    private void OpenModelManagerMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        ShowModelManagementTab();
     }
 
     private void RecordButton_Click(object sender, RoutedEventArgs e)
@@ -282,6 +1063,18 @@ public partial class MainWindow : Window
 
     private void StartRecording()
     {
+        if (_isDownloadingModel)
+        {
+            SetStatus("Please wait for the current model download to finish.", Brushes.OrangeRed);
+            return;
+        }
+
+        if (!HasActiveModel)
+        {
+            SetStatus("Select or download a Whisper model before recording.", Brushes.OrangeRed);
+            return;
+        }
+
         if (_isTranscribing)
         {
             SetStatus("Please wait for the current transcription to finish.", Brushes.OrangeRed);
@@ -318,12 +1111,14 @@ public partial class MainWindow : Window
             );
             RecordingFileText.Text = "Recording in progress...";
             ResultTextBox.Text = string.Empty;
+            UpdateRecordButtonState();
         }
         catch (Exception ex)
         {
             _isRecording = false;
             SetStatus($"Capture error: {ex.Message}", Brushes.Red, showTrayBalloon: true);
             DeviceComboBox.IsEnabled = _audioDevices.Count > 0;
+            UpdateRecordButtonState();
         }
     }
 
@@ -335,6 +1130,7 @@ public partial class MainWindow : Window
             RecordButton.IsEnabled = false;
             SetStatus("Finishing recording...", Brushes.DarkOrange);
             RecordingFileText.Text = "Processing recording...";
+            UpdateRecordButtonState();
         }
         catch (Exception ex)
         {
@@ -344,6 +1140,7 @@ public partial class MainWindow : Window
             SetStatus($"Stop failed: {ex.Message}", Brushes.Red, showTrayBalloon: true);
             RecordingFileText.Text = "Recording cancelled due to error.";
             DeviceComboBox.IsEnabled = _audioDevices.Count > 0;
+            UpdateRecordButtonState();
         }
     }
 
@@ -359,6 +1156,7 @@ public partial class MainWindow : Window
 
         RecordButton.Content = "Start Recording";
         DeviceComboBox.IsEnabled = _audioDevices.Count > 0;
+        UpdateRecordButtonState();
 
         if (!File.Exists(filePath))
         {
@@ -462,6 +1260,8 @@ public partial class MainWindow : Window
                 RecordButton.IsEnabled = true;
                 DeviceComboBox.IsEnabled = true;
             }
+
+            UpdateRecordButtonState();
         }
     }
 
@@ -1042,6 +1842,8 @@ public partial class MainWindow : Window
             _trayIcon.Dispose();
             _trayIcon = null;
         }
+
+        _modelService.Dispose();
     }
 
     private void DisposeAudioDevices()
