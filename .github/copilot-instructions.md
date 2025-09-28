@@ -31,5 +31,4 @@
 
 ## Build, run, and verify
 - Restore/build with `dotnet restore` followed by `dotnet run --project Stenographer/Stenographer.csproj` on Windows (Media Foundation must be available for the resampler).
-- Use the in-app "Test with Sample Audio" button to exercise transcription without a microphone; sample files live under `TestAudio/` and are copied to the output.
 - There are no automated tests; validate changes by recording real audio, ensuring transcription text appears in the UI, and confirming insertion into a target like Notepad while watching `StatusText` feedback.
