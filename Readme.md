@@ -33,7 +33,6 @@ Stenographer/
 │   ├── Core/, Services/, Models/ # Audio capture, hotkeys, insertion, configuration
 │   └── Stenographer.csproj       # Project file (WinExe, net8.0-windows)
 ├── Models/whisper.cpp/           # Whisper executable + model (copied to output)
-├── TestAudio/                    # Sample audio file for manual testing
 ├── setup_models.bat              # Downloads Whisper binaries/models
 └── Readme.md
 ```
@@ -55,7 +54,7 @@ The script downloads the latest Windows `main.exe` build of Whisper.cpp and the 
 ```powershell
 dotnet run --project Stenographer/Stenographer.csproj
 ```
-Press the global hotkey to record, then release it to trigger transcription. Use the in-app “Test with Sample Audio” button for quick, microphone-free validation.
+Press the global hotkey to record, then release it to trigger transcription.
 
 ## Build & deployment
 ### One-command release packaging
@@ -74,7 +73,7 @@ The publish output lives under `Stenographer\bin\Release\net8.0-windows\win-x64\
 
 ## Deployment checklist
 - Copy the entire publish folder to the target machine.
-- Ensure `Models\\whisper.cpp\\main.exe`, `Models\\whisper.cpp\\ggml-base.bin`, and sample audio files are present (they are included automatically when using the publish output).
+- Ensure `Models\\whisper.cpp\\main.exe` and `Models\\whisper.cpp\\ggml-base.bin` are present (they are included automatically when using the publish output).
 - Run `setup_models.bat` on fresh installs if the models are not already bundled.
 
 ## Troubleshooting

@@ -90,8 +90,6 @@ public partial class MainWindow : Window
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
 
-        TestButton.IsEnabled = ResolveSampleAudioPath() != null;
-
         _defaultHotkeyStatusBrush = HotkeyStatusText.Foreground;
         _defaultLanguageStatusBrush = LanguageStatusText.Foreground;
         InitializeLanguageSelection();
@@ -194,15 +192,11 @@ public partial class MainWindow : Window
                 _audioDevices.Count > 0 ? "Microphone ready" : "Connect a microphone to begin",
                 _audioDevices.Count > 0 ? Brushes.Green : Brushes.OrangeRed
             );
-
-            TestButton.IsEnabled =
-                !_isRecording && !_isTranscribing && ResolveSampleAudioPath() != null;
         }
         catch (Exception ex)
         {
             SetStatus($"Device error: {ex.Message}", Brushes.Red, showTrayBalloon: true);
             RecordButton.IsEnabled = false;
-            TestButton.IsEnabled = ResolveSampleAudioPath() != null;
         }
     }
 
@@ -286,43 +280,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void TestButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_isRecording)
-        {
-            SetStatus(
-                "Stop the current recording before running the sample test.",
-                Brushes.OrangeRed
-            );
-            return;
-        }
-
-        if (_isTranscribing)
-        {
-            SetStatus("Transcription already in progress.", Brushes.OrangeRed);
-            return;
-        }
-
-        var samplePath = ResolveSampleAudioPath();
-        if (string.IsNullOrEmpty(samplePath) || !File.Exists(samplePath))
-        {
-            SetStatus("Sample audio file not found in the TestAudio folder.", Brushes.Red);
-            RecordingFileText.Text = "Add a sample audio file (e.g. test.mp3) to TestAudio.";
-            TestButton.IsEnabled = false;
-            return;
-        }
-
-        RecordingFileText.Text = $"Sample file: {samplePath}";
-        ResultTextBox.Text = string.Empty;
-
-        await TranscribeAndDisplayAsync(
-            samplePath,
-            deleteAfterProcessing: false,
-            contextLabel: "sample audio",
-            initialMessage: $"Sample file: {samplePath}"
-        );
-    }
-
     private void StartRecording()
     {
         if (_isTranscribing)
@@ -351,7 +308,6 @@ public partial class MainWindow : Window
             _audioCapture.StartCapture(deviceIndex);
             _isRecording = true;
             _currentRecordingPath = string.Empty;
-            TestButton.IsEnabled = false;
 
             RecordButton.Content = "Stop Recording";
             SetStatus(
@@ -368,7 +324,6 @@ public partial class MainWindow : Window
             _isRecording = false;
             SetStatus($"Capture error: {ex.Message}", Brushes.Red, showTrayBalloon: true);
             DeviceComboBox.IsEnabled = _audioDevices.Count > 0;
-            TestButton.IsEnabled = ResolveSampleAudioPath() != null;
         }
     }
 
@@ -380,7 +335,6 @@ public partial class MainWindow : Window
             RecordButton.IsEnabled = false;
             SetStatus("Finishing recording...", Brushes.DarkOrange);
             RecordingFileText.Text = "Processing recording...";
-            TestButton.IsEnabled = false;
         }
         catch (Exception ex)
         {
@@ -390,7 +344,6 @@ public partial class MainWindow : Window
             SetStatus($"Stop failed: {ex.Message}", Brushes.Red, showTrayBalloon: true);
             RecordingFileText.Text = "Recording cancelled due to error.";
             DeviceComboBox.IsEnabled = _audioDevices.Count > 0;
-            TestButton.IsEnabled = ResolveSampleAudioPath() != null;
         }
     }
 
@@ -417,7 +370,6 @@ public partial class MainWindow : Window
             );
             RecordingFileText.Text = "Recording file missing.";
             ResultTextBox.Text = string.Empty;
-            TestButton.IsEnabled = ResolveSampleAudioPath() != null;
             return;
         }
 
@@ -444,7 +396,6 @@ public partial class MainWindow : Window
 
         RecordButton.IsEnabled = false;
         DeviceComboBox.IsEnabled = false;
-        TestButton.IsEnabled = false;
 
         if (!string.IsNullOrWhiteSpace(initialMessage))
         {
@@ -503,10 +454,6 @@ public partial class MainWindow : Window
                     RecordingFileText.Text = "Transcription complete. Failed to delete temp file.";
                 }
             }
-            else
-            {
-                RecordingFileText.Text = $"Sample file: {audioFilePath}";
-            }
 
             _isTranscribing = false;
 
@@ -515,8 +462,6 @@ public partial class MainWindow : Window
                 RecordButton.IsEnabled = true;
                 DeviceComboBox.IsEnabled = true;
             }
-
-            TestButton.IsEnabled = ResolveSampleAudioPath() != null;
         }
     }
 
@@ -1041,23 +986,6 @@ public partial class MainWindow : Window
                 or Key.RWin;
     }
 
-    private string ResolveSampleAudioPath()
-    {
-        var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
-        var candidates = new[] { "test.mp3", "test.wav", "jfk.mp3", "jfk.wav" };
-
-        foreach (var fileName in candidates)
-        {
-            var candidatePath = Path.Combine(baseDirectory, "TestAudio", fileName);
-            if (File.Exists(candidatePath))
-            {
-                return candidatePath;
-            }
-        }
-
-        return null;
-    }
-
     private void CleanupResources()
     {
         if (_cleanupInvoked)
@@ -1085,7 +1013,6 @@ public partial class MainWindow : Window
         DisposeAudioDevices();
 
         _isTranscribing = false;
-        TestButton.IsEnabled = ResolveSampleAudioPath() != null;
 
         if (_windowSource != null)
         {
