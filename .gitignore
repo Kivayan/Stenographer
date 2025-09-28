@@ -1,0 +1,95 @@
+# Visual Studio / .NET .gitignore
+# See https://github.com/github/gitignore for more templates
+
+## Build folders
+[Bb]in/
+[Oo]bj/
+
+## VS workspace and user files
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+## Rider
+.idea/
+*.sln.iml
+
+## Resharper
+_ReSharper*/
+*.DotSettings.user
+
+## NuGet
+*.nupkg
+packages/
+.nuget/
+project.lock.json
+project.assets.json
+
+## Azure DevOps / Visual Studio publish
+*.azurePubxml
+*.azurePubxml.user
+
+## DotCover
+*.dotCover
+
+## Coverage and test results
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+coverage*.xml
+
+## Visual Studio Code
+.vscode/
+
+## IIS Express
+/config*/applicationhost.config
+/.vs/
+
+## Rider caches and metadata
+.idea/
+*.sln.iml
+
+## Misc
+*.log
+*.vspscc
+*.vssscc
+*.ncb
+*.sdf
+*.cache
+*.dbmdl
+
+# OS files
+Thumbs.db
+*.DS_Store
+
+# Ignore NuGet packages folder created by packages.config
+packages/
+
+# Ignore publish output
+publish/
+
+# Ignore the build output for the solution
+**/bin/
+**/obj/
+
+# Rider and JetBrains IDEs
+.idea/
+*.iws
+
+# Visual Studio Code workspace settings
+.vscode/
+
+# User-specific files
+*.rsuser
+*.userprefs
+
+# Exclude built NuGet packages
+*.nupkg
+
+# Uncomment if using Azure Functions
+# local.settings.json
+
+Stenographer/Models/whisper.cpp/ggml-base.bin
