@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Media;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -40,6 +41,10 @@ public partial class MainWindow : Window
     private readonly ConfigurationService _configurationService;
     private readonly TextInsertion _textInsertion;
     private readonly WindowManager _windowManager;
+    private const string StartSoundFileName = "record_start.wav";
+    private const string StopSoundFileName = "record_stop.wav";
+    private readonly SoundPlayer _startSoundPlayer;
+    private readonly SoundPlayer _stopSoundPlayer;
     private IntPtr _targetWindowHandle = IntPtr.Zero;
     private string _targetWindowTitle = string.Empty;
     private string _targetProcessName = string.Empty;
@@ -65,6 +70,8 @@ public partial class MainWindow : Window
         _textInsertion = new TextInsertion();
         _windowManager = new WindowManager();
         _hotkeyManager = new HotkeyManager();
+        _startSoundPlayer = CreateSoundPlayer(StartSoundFileName);
+        _stopSoundPlayer = CreateSoundPlayer(StopSoundFileName);
 
         _audioCapture.RecordingComplete += OnRecordingComplete;
         _hotkeyManager.HotkeyPressed += OnGlobalHotkeyPressed;
@@ -499,6 +506,7 @@ public partial class MainWindow : Window
                 return;
             }
 
+            PlaySoundCue(_startSoundPlayer);
             CaptureActiveWindowContext();
             StartRecording();
 
@@ -525,6 +533,7 @@ public partial class MainWindow : Window
 
             if (_isRecording)
             {
+                PlaySoundCue(_stopSoundPlayer);
                 StopRecording();
             }
 
@@ -794,6 +803,48 @@ public partial class MainWindow : Window
     {
         var code = _currentLanguageOption?.Code;
         return string.IsNullOrWhiteSpace(code) ? string.Empty : code;
+    }
+
+    private static SoundPlayer CreateSoundPlayer(string fileName)
+    {
+        try
+        {
+            var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+            var candidatePaths = new[]
+            {
+                Path.Combine(baseDirectory, "Assets", "Audio", fileName),
+                Path.Combine(baseDirectory, "Resources", fileName),
+            };
+
+            var fullPath = candidatePaths.FirstOrDefault(File.Exists);
+
+            if (string.IsNullOrEmpty(fullPath))
+            {
+                return null;
+            }
+
+            var player = new SoundPlayer(fullPath);
+            player.LoadAsync();
+            return player;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void PlaySoundCue(SoundPlayer player)
+    {
+        if (player == null)
+        {
+            return;
+        }
+
+        try
+        {
+            player.Play();
+        }
+        catch { }
     }
 
     private void SetHotkeyButtonsEnabled(bool enabled)
