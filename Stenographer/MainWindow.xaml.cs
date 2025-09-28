@@ -13,6 +13,7 @@ using NAudio.CoreAudioApi;
 using Stenographer.Core;
 using Stenographer.Models;
 using Stenographer.Services;
+using Forms = System.Windows.Forms;
 
 namespace Stenographer;
 
@@ -60,6 +61,10 @@ public partial class MainWindow : Window
     private bool _isTranscribing;
     private string _currentRecordingPath = string.Empty;
     private bool _cleanupInvoked;
+    private Forms.NotifyIcon _notifyIcon;
+    private Forms.ContextMenuStrip _trayMenu;
+    private System.Drawing.Icon _trayIcon;
+    private bool _trayBalloonShown;
 
     public MainWindow()
     {
@@ -92,6 +97,7 @@ public partial class MainWindow : Window
         InitializeLanguageSelection();
         UpdateHotkeyDisplay();
         RestoreHotkeyHint();
+        InitializeSystemTray();
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -112,6 +118,32 @@ public partial class MainWindow : Window
         else
         {
             RestoreHotkeyHint();
+        }
+    }
+
+    protected override void OnStateChanged(EventArgs e)
+    {
+        base.OnStateChanged(e);
+
+        if (_notifyIcon == null)
+        {
+            return;
+        }
+
+        if (WindowState == WindowState.Minimized)
+        {
+            Hide();
+            ShowInTaskbar = false;
+            UpdateTrayStatus("Minimized to tray");
+
+            if (!_trayBalloonShown)
+            {
+                ShowTrayBalloon(
+                    "Stenographer is still running. Use the global hotkey to record.",
+                    Forms.ToolTipIcon.Info
+                );
+                _trayBalloonShown = true;
+            }
         }
     }
 
@@ -158,17 +190,17 @@ public partial class MainWindow : Window
             ResultTextBox.Text =
                 _audioDevices.Count > 0 ? "Recording not started." : "Waiting for an audio device.";
 
-            StatusText.Text =
-                _audioDevices.Count > 0 ? "Microphone ready" : "Connect a microphone to begin";
-            StatusText.Foreground = _audioDevices.Count > 0 ? Brushes.Green : Brushes.OrangeRed;
+            SetStatus(
+                _audioDevices.Count > 0 ? "Microphone ready" : "Connect a microphone to begin",
+                _audioDevices.Count > 0 ? Brushes.Green : Brushes.OrangeRed
+            );
 
             TestButton.IsEnabled =
                 !_isRecording && !_isTranscribing && ResolveSampleAudioPath() != null;
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Device error: {ex.Message}";
-            StatusText.Foreground = Brushes.Red;
+            SetStatus($"Device error: {ex.Message}", Brushes.Red, showTrayBalloon: true);
             RecordButton.IsEnabled = false;
             TestButton.IsEnabled = ResolveSampleAudioPath() != null;
         }
@@ -258,23 +290,23 @@ public partial class MainWindow : Window
     {
         if (_isRecording)
         {
-            StatusText.Text = "Stop the current recording before running the sample test.";
-            StatusText.Foreground = Brushes.OrangeRed;
+            SetStatus(
+                "Stop the current recording before running the sample test.",
+                Brushes.OrangeRed
+            );
             return;
         }
 
         if (_isTranscribing)
         {
-            StatusText.Text = "Transcription already in progress.";
-            StatusText.Foreground = Brushes.OrangeRed;
+            SetStatus("Transcription already in progress.", Brushes.OrangeRed);
             return;
         }
 
         var samplePath = ResolveSampleAudioPath();
         if (string.IsNullOrEmpty(samplePath) || !File.Exists(samplePath))
         {
-            StatusText.Text = "Sample audio file not found in the TestAudio folder.";
-            StatusText.Foreground = Brushes.Red;
+            SetStatus("Sample audio file not found in the TestAudio folder.", Brushes.Red);
             RecordingFileText.Text = "Add a sample audio file (e.g. test.mp3) to TestAudio.";
             TestButton.IsEnabled = false;
             return;
@@ -295,15 +327,13 @@ public partial class MainWindow : Window
     {
         if (_isTranscribing)
         {
-            StatusText.Text = "Please wait for the current transcription to finish.";
-            StatusText.Foreground = Brushes.OrangeRed;
+            SetStatus("Please wait for the current transcription to finish.", Brushes.OrangeRed);
             return;
         }
 
         if (_audioDevices.Count == 0)
         {
-            StatusText.Text = "No audio devices available.";
-            StatusText.Foreground = Brushes.Red;
+            SetStatus("No audio devices available.", Brushes.Red);
             return;
         }
 
@@ -324,16 +354,19 @@ public partial class MainWindow : Window
             TestButton.IsEnabled = false;
 
             RecordButton.Content = "Stop Recording";
-            StatusText.Text = "Recording... Press Stop Recording when finished.";
-            StatusText.Foreground = Brushes.Red;
+            SetStatus(
+                "Recording... Press Stop Recording when finished.",
+                Brushes.Red,
+                isRecording: true,
+                showTrayBalloon: true
+            );
             RecordingFileText.Text = "Recording in progress...";
             ResultTextBox.Text = string.Empty;
         }
         catch (Exception ex)
         {
             _isRecording = false;
-            StatusText.Text = $"Capture error: {ex.Message}";
-            StatusText.Foreground = Brushes.Red;
+            SetStatus($"Capture error: {ex.Message}", Brushes.Red, showTrayBalloon: true);
             DeviceComboBox.IsEnabled = _audioDevices.Count > 0;
             TestButton.IsEnabled = ResolveSampleAudioPath() != null;
         }
@@ -345,8 +378,7 @@ public partial class MainWindow : Window
         {
             _audioCapture.StopCapture();
             RecordButton.IsEnabled = false;
-            StatusText.Text = "Finishing recording...";
-            StatusText.Foreground = Brushes.DarkOrange;
+            SetStatus("Finishing recording...", Brushes.DarkOrange);
             RecordingFileText.Text = "Processing recording...";
             TestButton.IsEnabled = false;
         }
@@ -355,8 +387,7 @@ public partial class MainWindow : Window
             _isRecording = false;
             RecordButton.Content = "Start Recording";
             RecordButton.IsEnabled = true;
-            StatusText.Text = $"Stop failed: {ex.Message}";
-            StatusText.Foreground = Brushes.Red;
+            SetStatus($"Stop failed: {ex.Message}", Brushes.Red, showTrayBalloon: true);
             RecordingFileText.Text = "Recording cancelled due to error.";
             DeviceComboBox.IsEnabled = _audioDevices.Count > 0;
             TestButton.IsEnabled = ResolveSampleAudioPath() != null;
@@ -379,8 +410,11 @@ public partial class MainWindow : Window
         if (!File.Exists(filePath))
         {
             RecordButton.IsEnabled = _audioDevices.Count > 0;
-            StatusText.Text = "Recording complete, but the file could not be found.";
-            StatusText.Foreground = Brushes.OrangeRed;
+            SetStatus(
+                "Recording complete, but the file could not be found.",
+                Brushes.OrangeRed,
+                showTrayBalloon: true
+            );
             RecordingFileText.Text = "Recording file missing.";
             ResultTextBox.Text = string.Empty;
             TestButton.IsEnabled = ResolveSampleAudioPath() != null;
@@ -417,8 +451,7 @@ public partial class MainWindow : Window
             RecordingFileText.Text = initialMessage;
         }
 
-        StatusText.Text = $"Transcribing {contextLabel}...";
-        StatusText.Foreground = Brushes.SteelBlue;
+        SetStatus($"Transcribing {contextLabel}...", Brushes.SteelBlue);
         ResultTextBox.Text = "Processing transcription...";
 
         try
@@ -433,9 +466,11 @@ public partial class MainWindow : Window
             if (string.IsNullOrWhiteSpace(trimmedTranscription))
             {
                 ResultTextBox.Text = "(No transcription returned.)";
-                StatusText.Text =
-                    $"Transcription completed for {contextLabel}, but no text was produced.";
-                StatusText.Foreground = Brushes.OrangeRed;
+                SetStatus(
+                    $"Transcription completed for {contextLabel}, but no text was produced.",
+                    Brushes.OrangeRed,
+                    showTrayBalloon: true
+                );
                 ResetTargetWindowContext();
             }
             else
@@ -447,8 +482,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             ResultTextBox.Text = string.Empty;
-            StatusText.Text = $"Transcription error: {ex.Message}";
-            StatusText.Foreground = Brushes.Red;
+            SetStatus($"Transcription error: {ex.Message}", Brushes.Red, showTrayBalloon: true);
             ResetTargetWindowContext();
         }
         finally
@@ -748,8 +782,11 @@ public partial class MainWindow : Window
 
         if (!focusSucceeded)
         {
-            StatusText.Text = $"Couldn't focus {destination}. Text not inserted.";
-            StatusText.Foreground = Brushes.OrangeRed;
+            SetStatus(
+                $"Couldn't focus {destination}. Text not inserted.",
+                Brushes.OrangeRed,
+                showTrayBalloon: true
+            );
             ResetTargetWindowContext();
             return;
         }
@@ -759,8 +796,7 @@ public partial class MainWindow : Window
             await Task.Delay(180).ConfigureAwait(true);
         }
 
-        StatusText.Text = $"Inserting text into {destination}...";
-        StatusText.Foreground = Brushes.SteelBlue;
+        SetStatus($"Inserting text into {destination}...", Brushes.SteelBlue);
 
         try
         {
@@ -771,8 +807,11 @@ public partial class MainWindow : Window
                 var reason = string.IsNullOrWhiteSpace(_textInsertion.LastDiagnosticMessage)
                     ? "Clipboard insertion failed."
                     : _textInsertion.LastDiagnosticMessage;
-                StatusText.Text = $"No text inserted into {destination}: {reason}";
-                StatusText.Foreground = Brushes.OrangeRed;
+                SetStatus(
+                    $"No text inserted into {destination}: {reason}",
+                    Brushes.OrangeRed,
+                    showTrayBalloon: true
+                );
                 return;
             }
 
@@ -783,20 +822,156 @@ public partial class MainWindow : Window
                 _ => string.Empty,
             };
 
-            StatusText.Text = string.IsNullOrEmpty(methodLabel)
+            var successMessage = string.IsNullOrEmpty(methodLabel)
                 ? $"Inserted into {destination}."
                 : $"Inserted into {destination} {methodLabel}.";
-            StatusText.Foreground = Brushes.Green;
+            SetStatus(successMessage, Brushes.Green);
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Insertion failed: {ex.Message}";
-            StatusText.Foreground = Brushes.OrangeRed;
+            SetStatus($"Insertion failed: {ex.Message}", Brushes.OrangeRed, showTrayBalloon: true);
         }
         finally
         {
             ResetTargetWindowContext();
         }
+    }
+
+    private void InitializeSystemTray()
+    {
+        if (_notifyIcon != null)
+        {
+            return;
+        }
+
+        try
+        {
+            var iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Stenographer.ico");
+
+            if (File.Exists(iconPath))
+            {
+                _trayIcon = new System.Drawing.Icon(iconPath);
+            }
+        }
+        catch
+        {
+            _trayIcon = null;
+        }
+
+        if (_trayIcon == null)
+        {
+            _trayIcon = (System.Drawing.Icon)System.Drawing.SystemIcons.Application.Clone();
+        }
+
+        _notifyIcon = new Forms.NotifyIcon
+        {
+            Icon = _trayIcon,
+            Visible = true,
+            Text = BuildTrayTooltip("Ready"),
+        };
+
+        _trayMenu = new Forms.ContextMenuStrip();
+        _trayMenu.Items.Add("Show", null, (_, _) => ShowFromTray());
+        _trayMenu.Items.Add(new Forms.ToolStripSeparator());
+        _trayMenu.Items.Add("Exit", null, (_, _) => ExitFromTray());
+
+        _notifyIcon.ContextMenuStrip = _trayMenu;
+        _notifyIcon.DoubleClick += (_, _) => ShowFromTray();
+
+        UpdateTrayStatus(StatusText?.Text ?? "Ready");
+    }
+
+    private void ShowFromTray()
+    {
+        if (_notifyIcon == null)
+        {
+            return;
+        }
+
+        Show();
+        ShowInTaskbar = true;
+        WindowState = WindowState.Normal;
+        Activate();
+        Focus();
+
+        UpdateTrayStatus(StatusText?.Text ?? "Ready", _isRecording);
+    }
+
+    private void ExitFromTray()
+    {
+        Application.Current.Shutdown();
+    }
+
+    private void UpdateTrayStatus(string status, bool isRecording = false, bool showBalloon = false)
+    {
+        if (_notifyIcon == null)
+        {
+            return;
+        }
+
+        var tooltip = BuildTrayTooltip(status);
+
+        try
+        {
+            _notifyIcon.Text = tooltip;
+        }
+        catch
+        {
+            _notifyIcon.Text = BuildTrayTooltip("Stenographer");
+        }
+
+        if (showBalloon)
+        {
+            var icon = isRecording ? Forms.ToolTipIcon.Info : Forms.ToolTipIcon.None;
+            ShowTrayBalloon(status, icon);
+        }
+    }
+
+    private string BuildTrayTooltip(string status)
+    {
+        var message = string.IsNullOrWhiteSpace(status)
+            ? "Ready"
+            : status.Replace("\r", " ").Replace("\n", " ");
+
+        var tooltip = $"Stenographer - {message}";
+
+        return tooltip.Length <= 63 ? tooltip : tooltip.Substring(0, 63);
+    }
+
+    private void ShowTrayBalloon(string message, Forms.ToolTipIcon icon = Forms.ToolTipIcon.None)
+    {
+        if (_notifyIcon == null)
+        {
+            return;
+        }
+
+        try
+        {
+            _notifyIcon.BalloonTipTitle = "Stenographer";
+            _notifyIcon.BalloonTipText = string.IsNullOrWhiteSpace(message) ? "Ready" : message;
+            _notifyIcon.BalloonTipIcon = icon;
+            _notifyIcon.ShowBalloonTip(1500);
+        }
+        catch
+        {
+            // ignored
+        }
+    }
+
+    private void SetStatus(
+        string message,
+        Brush brush,
+        bool isRecording = false,
+        bool showTrayBalloon = false
+    )
+    {
+        if (StatusText != null)
+        {
+            StatusText.Text = message;
+            StatusText.Foreground = brush;
+        }
+
+        UpdateTrayStatus(message, isRecording, showTrayBalloon);
     }
 
     private string GetSelectedLanguageCode()
@@ -921,6 +1096,25 @@ public partial class MainWindow : Window
         _hotkeyManager.HotkeyPressed -= OnGlobalHotkeyPressed;
         _hotkeyManager.HotkeyReleased -= OnGlobalHotkeyReleased;
         _hotkeyManager.Dispose();
+
+        if (_notifyIcon != null)
+        {
+            _notifyIcon.Visible = false;
+            _notifyIcon.Dispose();
+            _notifyIcon = null;
+        }
+
+        if (_trayMenu != null)
+        {
+            _trayMenu.Dispose();
+            _trayMenu = null;
+        }
+
+        if (_trayIcon != null)
+        {
+            _trayIcon.Dispose();
+            _trayIcon = null;
+        }
     }
 
     private void DisposeAudioDevices()
