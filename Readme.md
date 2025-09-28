@@ -1,9 +1,19 @@
 # Stenographer
 
-Stenographer is a Windows 10/11 desktop app that captures speech locally, transcribes it with Whisper.cpp, and inserts the resulting text into whatever application currently has focus. Everything runs offline on your machine—no cloud services, no data leaving your PC.
+Stenographer is a Windows 10/11 desktop app that captures speech locally, transcribes it with Whisper.cpp, and inserts the resulting text into whatever application currently has focus.
+
+`Everything runs offline on your machine — no cloud services, no data leaving your PC! - that was the main motivation behind building this tool.`
+
+---
+**IMPORTANT**
+This is 90% vibe-coded project for personal use and learning.(GH Copilot with GPT-5 Codex + perplexity-ask + context7)
+I haven't written a line of code - just designed, split to development milestones and steered the project in right direction while testing for real use.
+It works well enough for me, but it is not production-ready software. Use at your own risk.
+Tested with gglm-base.bin model only.
+---
 
 ## Feature highlights
-- **Global hotkey capture** – press <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd> to start/stop recording from anywhere.
+- **Global hotkey capture (Configurable)** – press <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd> to start/stop recording from anywhere.
 - **Offline transcription** – executes the Whisper.cpp binaries bundled with the app; just ship the required model files.
 - **Smart text insertion** – uses UI Automation when possible, falls back to clipboard + `SendInput` while restoring clipboard contents afterwards.
 - **Foreground window rebinding** – remembers the window that had focus when recording began and restores focus before pasting.
@@ -75,8 +85,5 @@ The publish output lives under `Stenographer\bin\Release\net8.0-windows\win-x64\
 | Whisper process fails | Verify that `main.exe` and `ggml-base.bin` exist under `Models\\whisper.cpp`. Re-run `setup_models.bat` if necessary. |
 | Text not inserted | Target applications with restricted input may block automation. Check the status bar to see whether clipboard fallback failed and retry with the target focused. |
 
-## Next steps
-- Swap in a larger or multilingual Whisper model by downloading the desired `.bin` file and updating `setup_models.bat`.
-- Extend the deployment pipeline with code signing or an installer (MSIX/Inno Setup) as needed.
-- Automate QA with scripted smoke tests around the publish output and hotkey registration.
+
 
