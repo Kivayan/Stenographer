@@ -23,8 +23,6 @@
 
                 <Button x:Name="RecordButton" Content="Start Recording" Margin="0,16,0,0" Height="40" FontSize="16" Click="RecordButton_Click" />
 
-                <Button x:Name="TestButton" Content="Test with Sample Audio" Margin="0,8,0,0" Height="32" Click="TestButton_Click" />
-
                 <Separator Margin="0,16,0,16" />
 
                 <TextBlock Text="Global Hotkey" FontWeight="SemiBold" />
