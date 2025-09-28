@@ -280,8 +280,6 @@ public partial class MainWindow : Window
         }
     }
 
-
-
     private void StartRecording()
     {
         if (_isTranscribing)
@@ -346,7 +344,6 @@ public partial class MainWindow : Window
             SetStatus($"Stop failed: {ex.Message}", Brushes.Red, showTrayBalloon: true);
             RecordingFileText.Text = "Recording cancelled due to error.";
             DeviceComboBox.IsEnabled = _audioDevices.Count > 0;
-        }
         }
     }
 
@@ -988,8 +985,6 @@ public partial class MainWindow : Window
                 or Key.LWin
                 or Key.RWin;
     }
-
-
 
     private void CleanupResources()
     {
